@@ -1,0 +1,3 @@
+# boto3 ya está incluido en el runtime de Lambda Python 3.12,
+# pero se lista aquí para claridad y para instalación local en tests.
+boto3

@@ -1,0 +1,18 @@
+# CDK
+infra/.venv/
+infra/cdk.out/
+infra/__pycache__/
+infra/*.pyc
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

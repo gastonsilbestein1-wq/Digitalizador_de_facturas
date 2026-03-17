@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Procesador de Documentos Fiscales</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5; color: #222; min-height: 100vh;
+      display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px;
+    }
+    .card {
+      background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+      padding: 28px 24px; width: 100%; max-width: 480px;
+    }
+    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 6px; color: #111; }
+    .subtitle { font-size: 0.875rem; color: #666; margin-bottom: 24px; }
+    #inputCamera, #inputFile { display: none; }
+    .btn-group { display: flex; gap: 12px; margin-bottom: 20px; }
+    .btn {
+      flex: 1; padding: 12px 8px; border: none; border-radius: 8px;
+      font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+    }
+    .btn:active { opacity: 0.75; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary   { background: #1a73e8; color: #fff; }
+    .btn-secondary { background: #e8f0fe; color: #1a73e8; }
+    .btn-success   { background: #34a853; color: #fff; width: 100%; margin-top: 16px; }
+    #preview-wrap { display: none; margin-bottom: 20px; text-align: center; }
+    #preview-img { max-width: 100%; max-height: 220px; border-radius: 8px; border: 1px solid #ddd; object-fit: contain; }
+    #preview-name { font-size: 0.8rem; color: #555; margin-top: 6px; word-break: break-all; }
+    #btn-upload {
+      width: 100%; padding: 14px; background: #1a73e8; color: #fff; border: none;
+      border-radius: 8px; font-size: 1rem; font-weight: 700; cursor: pointer; display: none; transition: opacity 0.15s;
+    }
+    #btn-upload:active { opacity: 0.8; }
+    #btn-upload:disabled { opacity: 0.45; cursor: not-allowed; }
+    #progress-wrap { display: none; margin-top: 16px; }
+    .progress-label { font-size: 0.85rem; color: #555; margin-bottom: 6px; }
+    .progress-bar-bg { background: #e0e0e0; border-radius: 99px; height: 8px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: #1a73e8; border-radius: 99px; width: 0%; transition: width 0.3s; }
+    #msg-error {
+      display: none; margin-top: 14px; padding: 12px 14px;
+      background: #fce8e6; color: #c5221f; border-radius: 8px; font-size: 0.9rem;
+    }
+    #msg-success {
+      display: none; margin-top: 14px; padding: 16px 14px;
+      background: #e6f4ea; color: #137333; border-radius: 8px; font-size: 0.9rem;
+    }
+    #msg-success .id-label { font-size: 0.78rem; color: #555; margin-top: 6px; }
+    #msg-success .processing-id { font-family: monospace; font-size: 0.9rem; font-weight: 700; color: #111; word-break: break-all; }
+    #msg-success .json-link {
+      display: inline-block; margin-top: 12px; padding: 8px 14px;
+      background: #1a73e8; color: #fff; border-radius: 6px; text-decoration: none;
+      font-size: 0.9rem; font-weight: 600;
+    }
+    #msg-success .json-link:hover { opacity: 0.85; }
+    #msg-failed {
+      display: none; margin-top: 14px; padding: 16px 14px;
+      background: #fce8e6; color: #c5221f; border-radius: 8px; font-size: 0.9rem;
+    }
+    #msg-failed .error-code { font-family: monospace; font-weight: 700; margin-top: 6px; }
+    .error-hints { margin-top: 10px; font-size: 0.82rem; color: #555; }
+    .error-hints li { margin-top: 4px; margin-left: 16px; }
+  </style>
+</head>
+<body>
+  <script src="config.js"></script>
+  <div class="card">
+    <h1>Documentos Fiscales</h1>
+    <p class="subtitle">Subí o fotografiá una factura o ticket fiscal argentino (JPG, PNG · máx. 10 MB)</p>
+
+    <input type="file" id="inputCamera" accept="image/*" capture="environment" />
+    <input type="file" id="inputFile" accept=".jpg,.jpeg,.png" />
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="btn-camera">📷 Sacar foto</button>
+      <button class="btn btn-secondary" id="btn-file">📂 Subir archivo</button>
+    </div>
+
+    <div id="preview-wrap">
+      <img id="preview-img" alt="Vista previa del documento" />
+      <p id="preview-name"></p>
+    </div>
+
+    <button id="btn-upload">Enviar documento</button>
+
+    <div id="progress-wrap">
+      <p class="progress-label" id="progress-label">Subiendo...</p>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-bar"></div></div>
+    </div>
+
+    <div id="msg-error" role="alert"></div>
+
+    <div id="msg-success" role="status">
+      <strong>✅ Documento procesado correctamente.</strong>
+      <p class="id-label">ID de procesamiento:</p>
+      <p class="processing-id" id="processing-id-value"></p>
+      <a id="json-link" class="json-link" href="#" target="_blank">📄 Ver JSON fiscal</a>
+      <button class="btn btn-success" id="btn-reset">Procesar otro documento</button>
+    </div>
+
+    <div id="msg-failed" role="alert">
+      <strong>❌ El documento no pudo procesarse.</strong>
+      <p class="error-code" id="error-code-value"></p>
+      <ul class="error-hints" id="error-hints"></ul>
+      <button class="btn btn-success" style="background:#c5221f" id="btn-reset-failed">Intentar con otro documento</button>
+    </div>
+  </div>
+
+  <script>
+    const MAX_SIZE_BYTES    = 10 * 1024 * 1024; // 10 MB límite de upload
+    const TARGET_SIZE_BYTES = 3.5 * 1024 * 1024; // comprimir si supera 3.5 MB (límite Bedrock)
+    const VALID_EXTS     = ['.jpg', '.jpeg', '.png'];
+    const VALID_MIME     = ['image/jpeg', 'image/png'];
+    const POLL_INTERVAL  = 3000;  // 3 segundos
+    const POLL_MAX       = 40;    // máximo 2 minutos
+
+    const ERROR_HINTS = {
+      DOCUMENT_NOT_FISCAL:    ["El archivo no parece ser una factura o ticket fiscal argentino.", "Asegurate de subir una factura tipo A, B o ticket fiscal."],
+      QUALITY_BELOW_THRESHOLD:["La imagen tiene baja calidad o está muy borrosa.", "Intentá con una foto más nítida y bien iluminada."],
+      CLASSIFICATION_ERROR:   ["Hubo un error al analizar el documento.", "Intentá de nuevo en unos segundos."],
+      EVALUATION_ERROR:       ["Hubo un error al evaluar la calidad.", "Intentá de nuevo en unos segundos."],
+      EXTRACTION_ERROR:       ["Hubo un error al extraer los datos fiscales.", "Intentá de nuevo en unos segundos."],
+      JSON_WRITE_ERROR:       ["Hubo un error al guardar el resultado.", "Intentá de nuevo en unos segundos."],
+    };
+
+    const $ = id => document.getElementById(id);
+    const inputCamera   = $('inputCamera');
+    const inputFile     = $('inputFile');
+    const btnCamera     = $('btn-camera');
+    const btnFile       = $('btn-file');
+    const btnUpload     = $('btn-upload');
+    const previewWrap   = $('preview-wrap');
+    const previewImg    = $('preview-img');
+    const previewName   = $('preview-name');
+    const progressWrap  = $('progress-wrap');
+    const progressBar   = $('progress-bar');
+    const progressLabel = $('progress-label');
+    const msgError      = $('msg-error');
+    const msgSuccess    = $('msg-success');
+    const msgFailed     = $('msg-failed');
+
+    let selectedFile = null;
+    let pollTimer    = null;
+
+    function getApiUrl() {
+      return (window.APP_CONFIG && window.APP_CONFIG.apiUrl)
+        ? window.APP_CONFIG.apiUrl.replace(/\/$/, '') : '';
+    }
+
+    function showError(msg) { msgError.textContent = msg; msgError.style.display = 'block'; }
+    function hideError()    { msgError.style.display = 'none'; msgError.textContent = ''; }
+
+    function setUploading(active) {
+      btnUpload.disabled = btnCamera.disabled = btnFile.disabled = active;
+      progressWrap.style.display = active ? 'block' : 'none';
+      if (!active) { progressBar.style.width = '0%'; progressLabel.textContent = 'Subiendo...'; }
+    }
+
+    function resetForm() {
+      selectedFile = null;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      inputCamera.value = inputFile.value = '';
+      previewWrap.style.display = 'none';
+      previewImg.src = ''; previewName.textContent = '';
+      btnUpload.style.display = 'none';
+      msgSuccess.style.display = msgFailed.style.display = 'none';
+      hideError(); setUploading(false);
+    }
+
+    function validateFile(file) {
+      if (!file) return null;
+      const name = file.name.toLowerCase();
+      if (!VALID_EXTS.some(e => name.endsWith(e))) return 'Formato no válido. Usá JPG o PNG.';
+      return null;
+    }
+
+    // Comprime la imagen en canvas si supera TARGET_SIZE_BYTES.
+    // Devuelve un Blob JPEG con tamaño <= MAX_SIZE_BYTES.
+    async function compressIfNeeded(file) {
+      if (file.size <= TARGET_SIZE_BYTES) return file;
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          const canvas = document.createElement('canvas');
+          // Escalar si la imagen es muy grande
+          let { width, height } = img;
+          const MAX_DIM = 2048;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            const ratio = Math.min(MAX_DIM / width, MAX_DIM / height);
+            width  = Math.round(width  * ratio);
+            height = Math.round(height * ratio);
+          }
+          canvas.width = width; canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+
+          // Reducir calidad iterativamente hasta quedar bajo MAX_SIZE_BYTES
+          let quality = 0.85;
+          const tryCompress = () => {
+            canvas.toBlob(blob => {
+              if (!blob) { reject(new Error('No se pudo comprimir la imagen.')); return; }
+              if (blob.size <= MAX_SIZE_BYTES || quality <= 0.3) {
+                if (blob.size > MAX_SIZE_BYTES) {
+                  reject(new Error('La imagen es demasiado grande incluso comprimida. Usá una foto más pequeña.'));
+                } else {
+                  resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+                }
+              } else {
+                quality -= 0.1;
+                tryCompress();
+              }
+            }, 'image/jpeg', quality);
+          };
+          tryCompress();
+        };
+        img.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+        img.src = url;
+      });
+    }
+
+    function showPreview(file) {
+      previewName.textContent = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+      const reader = new FileReader();
+      reader.onload = e => { previewImg.src = e.target.result; };
+      reader.readAsDataURL(file);
+      previewImg.style.display = 'block';
+      previewWrap.style.display = 'block';
+    }
+
+    function handleFileSelected(file) {
+      hideError(); msgSuccess.style.display = msgFailed.style.display = 'none';
+      const err = validateFile(file);
+      if (err) { showError(err); btnUpload.style.display = 'none'; selectedFile = null; return; }
+      selectedFile = file;
+      showPreview(file);
+      btnUpload.style.display = 'block';
+    }
+
+    function showSuccess(processingId, outputUrl) {
+      $('processing-id-value').textContent = processingId;
+      $('json-link').href = outputUrl;
+      msgSuccess.style.display = 'block';
+      btnUpload.style.display = 'none';
+    }
+
+    function showFailed(errorCode) {
+      $('error-code-value').textContent = `Código: ${errorCode}`;
+      const hints = ERROR_HINTS[errorCode] || ['Intentá de nuevo con otro documento.'];
+      const ul = $('error-hints');
+      ul.innerHTML = hints.map(h => `<li>${h}</li>`).join('');
+      msgFailed.style.display = 'block';
+      btnUpload.style.display = 'none';
+    }
+
+    function pollStatus(apiUrl, processingId) {
+      let attempts = 0;
+      progressLabel.textContent = 'Procesando documento con IA...';
+      progressBar.style.width = '60%';
+
+      pollTimer = setInterval(async () => {
+        attempts++;
+        if (attempts > POLL_MAX) {
+          clearInterval(pollTimer);
+          setUploading(false);
+          showError('El procesamiento tardó demasiado. Revisá el estado más tarde con el ID: ' + processingId);
+          return;
+        }
+
+        try {
+          const res = await fetch(`${apiUrl}/status/${processingId}`);
+          const data = await res.json();
+
+          if (data.status === 'COMPLETED') {
+            clearInterval(pollTimer);
+            progressBar.style.width = '100%';
+            setTimeout(() => {
+              setUploading(false);
+              showSuccess(processingId, data.output_url);
+            }, 400);
+          } else if (data.status === 'FAILED') {
+            clearInterval(pollTimer);
+            setUploading(false);
+            showFailed(data.error_code || 'UNKNOWN_ERROR');
+          }
+          // Si está RUNNING seguimos esperando
+        } catch (e) {
+          // Error de red, seguimos intentando
+        }
+      }, POLL_INTERVAL);
+    }
+
+    inputCamera.addEventListener('change', () => { if (inputCamera.files[0]) handleFileSelected(inputCamera.files[0]); });
+    inputFile.addEventListener('change',   () => { if (inputFile.files[0])   handleFileSelected(inputFile.files[0]); });
+    btnCamera.addEventListener('click', () => inputCamera.click());
+    btnFile.addEventListener('click',   () => inputFile.click());
+    $('btn-reset').addEventListener('click', resetForm);
+    $('btn-reset-failed').addEventListener('click', resetForm);
+
+    btnUpload.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      hideError();
+
+      const apiUrl = getApiUrl();
+      if (!apiUrl) { showError('Error de configuración: la URL de la API no está definida.'); return; }
+
+      setUploading(true);
+      progressBar.style.width = '5%';
+
+      try {
+        // Comprimir si es necesario
+        progressLabel.textContent = 'Preparando imagen...';
+        let fileToUpload;
+        try {
+          fileToUpload = await compressIfNeeded(selectedFile);
+        } catch (compErr) {
+          setUploading(false);
+          showError(compErr.message);
+          return;
+        }
+        if (fileToUpload !== selectedFile) {
+          previewName.textContent = `${fileToUpload.name} (${(fileToUpload.size/1024).toFixed(1)} KB — comprimido)`;
+        }
+
+        progressLabel.textContent = 'Obteniendo URL de carga...';
+        progressBar.style.width = '20%';
+
+        const presignRes = await fetch(`${apiUrl}/presign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: fileToUpload.name,
+            content_type: fileToUpload.type || 'image/jpeg',
+            file_size: fileToUpload.size
+          })
+        });
+
+        if (!presignRes.ok) {
+          const body = await presignRes.json().catch(() => ({}));
+          if (body.error === 'FILE_TOO_LARGE') throw new Error('El archivo supera el límite de 5 MB.');
+          if (body.error === 'INVALID_FORMAT')  throw new Error('Formato no válido. Usá JPG o PNG.');
+          throw new Error('Error al procesar el documento. Intentá de nuevo.');
+        }
+
+        const { upload_url, processing_id } = await presignRes.json();
+        progressBar.style.width = '40%';
+
+        progressLabel.textContent = 'Subiendo documento...';
+        const uploadRes = await fetch(upload_url, {
+          method: 'PUT',
+          headers: { 'Content-Type': fileToUpload.type || 'image/jpeg' },
+          body: fileToUpload
+        });
+
+        if (!uploadRes.ok) throw new Error('Error al subir el archivo. Intentá de nuevo.');
+
+        progressBar.style.width = '55%';
+        pollStatus(apiUrl, processing_id);
+
+      } catch (err) {
+        setUploading(false);
+        showError(err.message || 'Error al procesar el documento. Intentá de nuevo.');
+      }
+    });
+  </script>
+</body>
+</html>

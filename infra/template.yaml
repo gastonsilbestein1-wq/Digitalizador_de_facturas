@@ -1,0 +1,1344 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Infraestructura base para el procesador de documentos fiscales argentinos.
+  Incluye buckets S3, tablas DynamoDB, roles IAM y grupos de logs CloudWatch.
+
+# ─────────────────────────────────────────────
+# PARÁMETROS
+# ─────────────────────────────────────────────
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Entorno de despliegue
+
+# ─────────────────────────────────────────────
+# RECURSOS
+# ─────────────────────────────────────────────
+Resources:
+
+  # ── S3: Bucket de entrada (Fact_input) ──────
+  FactInputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "fact-input-${Environment}-${AWS::AccountId}"
+      # Cifrado SSE-S3
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Regla de ciclo de vida: expirar objetos a los 7 días
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpirarDocumentosEntrada
+            Status: Enabled
+            ExpirationInDays: 7
+      # Notificaciones a EventBridge habilitadas
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      # Bloqueo de acceso público
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── S3: Bucket de salida (Fact_output) ──────
+  FactOutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "fact-output-${Environment}-${AWS::AccountId}"
+      # Cifrado SSE-S3
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Versionado habilitado (los JSONs son el output permanente del sistema)
+      VersioningConfiguration:
+        Status: Enabled
+      # Bloqueo de acceso público
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── DynamoDB: Estado de ejecuciones del pipeline ──
+  PipelineExecutionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: pipeline-executions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: processing_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: processing_id
+          KeyType: HASH
+
+  # ── DynamoDB: Contador de transacciones por día ──
+  TxCounterTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tx-counter
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+
+  # ─────────────────────────────────────────────
+  # ROLES IAM (principio de mínimo privilegio)
+  # ─────────────────────────────────────────────
+
+  # ── Rol para Lambda presign ──────────────────
+  PresignLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "presign-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PresignLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permiso para generar URL pre-firmada (PutObject en Fact_input)
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "${FactInputBucket.Arn}/*"
+              # Permiso para leer JSONs del bucket de salida (presigned URL GET para status)
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${FactOutputBucket.Arn}/*"
+              # Permiso para leer y actualizar el contador de transacciones
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt TxCounterTable.Arn
+              # Permiso para consultar el estado de ejecuciones (endpoint /status)
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt PipelineExecutionsTable.Arn
+              # Permisos básicos de CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/presign:*"
+
+  # ── Rol para Lambda doc-clasif ───────────────
+  DocClasifLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "doc-clasif-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DocClasifLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permiso para leer documentos del bucket de entrada
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${FactInputBucket.Arn}/*"
+              # Permiso para invocar modelos de Bedrock
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+              # Permisos básicos de CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/doc-clasif:*"
+
+  # ── Rol para Lambda doc-eval ─────────────────
+  DocEvalLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "doc-eval-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DocEvalLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permiso para leer documentos del bucket de entrada
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${FactInputBucket.Arn}/*"
+              # Permiso para invocar modelos de Bedrock
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+              # Permisos básicos de CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/doc-eval:*"
+
+  # ── Rol para Lambda data-extract ─────────────
+  DataExtractLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "data-extract-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DataExtractLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permiso para leer documentos del bucket de entrada
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${FactInputBucket.Arn}/*"
+              # Permiso para invocar modelos de Bedrock
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+              # Permisos básicos de CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/data-extract:*"
+
+  # ── Rol para Lambda json-gen ─────────────────
+  JsonGenLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "json-gen-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: JsonGenLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Permiso para escribir JSONs en el bucket de salida
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "${FactOutputBucket.Arn}/*"
+              # Permiso para escribir y actualizar el estado de ejecuciones
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt PipelineExecutionsTable.Arn
+              # Permisos básicos de CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/json-gen:*"
+
+  # ─────────────────────────────────────────────
+  # GRUPOS DE LOGS CLOUDWATCH (retención 30 días)
+  # ─────────────────────────────────────────────
+
+  LogGroupPresign:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/presign
+      RetentionInDays: 30
+
+  LogGroupDocClasif:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/doc-clasif
+      RetentionInDays: 30
+
+  LogGroupDocEval:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/doc-eval
+      RetentionInDays: 30
+
+  LogGroupDataExtract:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/data-extract
+      RetentionInDays: 30
+
+  LogGroupJsonGen:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/json-gen
+      RetentionInDays: 30
+
+  LogGroupStepFunctions:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/states/fiscal-pipeline
+      RetentionInDays: 30
+
+  # ─────────────────────────────────────────────
+  # LAMBDA: presign
+  # ─────────────────────────────────────────────
+
+  # ── Función Lambda presign ───────────────────
+  PresignFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroupPresign
+    Properties:
+      FunctionName: !Sub "presign-${Environment}"
+      Description: Genera URLs pre-firmadas para subida a S3 y asigna el processing_id
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt PresignLambdaRole.Arn
+      Timeout: 30
+      # Variables de entorno requeridas por la Lambda
+      Environment:
+        Variables:
+          FACT_INPUT_BUCKET: !Ref FactInputBucket
+          TX_COUNTER_TABLE: !Ref TxCounterTable
+          PIPELINE_EXECUTIONS_TABLE: !Ref PipelineExecutionsTable
+          FACT_OUTPUT_BUCKET: !Ref FactOutputBucket
+      # Código stub mínimo; el código real se despliega por separado (ZIP/SAM)
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 200, "body": "stub"}
+      # Apuntar al log group creado explícitamente con retención de 30 días
+      LoggingConfig:
+        LogGroup: /aws/lambda/presign
+
+  # ─────────────────────────────────────────────
+  # API GATEWAY HTTP API
+  # ─────────────────────────────────────────────
+
+  # ── HTTP API con CORS habilitado ─────────────
+  PresignApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "presign-api-${Environment}"
+      Description: API HTTP para el endpoint de pre-firma de documentos fiscales
+      ProtocolType: HTTP
+      # Configuración CORS para permitir llamadas desde la Web_App
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - POST
+          - GET
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+
+  # ── Integración Lambda con la función presign ─
+  PresignIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref PresignApi
+      Description: Integración proxy con la Lambda presign
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt PresignFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  # ── Ruta POST /presign ────────────────────────
+  PresignRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PresignApi
+      RouteKey: "POST /presign"
+      Target: !Sub "integrations/${PresignIntegration}"
+
+  # ── Ruta GET /status/{processingId} ──────────
+  StatusRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PresignApi
+      RouteKey: "GET /status/{processingId}"
+      Target: !Sub "integrations/${PresignIntegration}"
+
+  # ── Stage de despliegue con auto-deploy ───────
+  PresignApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref PresignApi
+      StageName: "$default"
+      Description: Stage de despliegue automático para la API presign
+      AutoDeploy: true
+
+  # ── Permiso para que API Gateway invoque la Lambda ──
+  PresignLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PresignFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PresignApi}/*/*/presign"
+
+  # ── Permiso para que API Gateway invoque la Lambda desde /status ──
+  StatusLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PresignFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PresignApi}/*/*/status/*"
+
+  # ─────────────────────────────────────────────
+  # LAMBDAS DEL PIPELINE
+  # ─────────────────────────────────────────────
+
+  # ── Lambda doc-clasif ────────────────────────
+  DocClasifFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroupDocClasif
+    Properties:
+      FunctionName: !Sub "doc-clasif-${Environment}"
+      Description: Clasifica el tipo de documento fiscal usando Bedrock (Claude)
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt DocClasifLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          FACT_INPUT_BUCKET: !Ref FactInputBucket
+          BEDROCK_MODEL_ID: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"error": "stub"}
+      LoggingConfig:
+        LogGroup: /aws/lambda/doc-clasif
+
+  # ── Lambda doc-eval ──────────────────────────
+  DocEvalFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroupDocEval
+    Properties:
+      FunctionName: !Sub "doc-eval-${Environment}"
+      Description: Evalúa la calidad del documento fiscal usando Bedrock (Claude)
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt DocEvalLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          FACT_INPUT_BUCKET: !Ref FactInputBucket
+          BEDROCK_MODEL_ID: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"error": "stub"}
+      LoggingConfig:
+        LogGroup: /aws/lambda/doc-eval
+
+  # ── Lambda data-extract ──────────────────────
+  DataExtractFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroupDataExtract
+    Properties:
+      FunctionName: !Sub "data-extract-${Environment}"
+      Description: Extrae los campos fiscales del documento usando Bedrock (Claude)
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt DataExtractLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          FACT_INPUT_BUCKET: !Ref FactInputBucket
+          BEDROCK_MODEL_ID: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"error": "stub"}
+      LoggingConfig:
+        LogGroup: /aws/lambda/data-extract
+
+  # ── Lambda json-gen ──────────────────────────
+  JsonGenFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroupJsonGen
+    Properties:
+      FunctionName: !Sub "json-gen-${Environment}"
+      Description: Ensambla el JSON_Fiscal y lo persiste en Fact_output
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt JsonGenLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          FACT_OUTPUT_BUCKET: !Ref FactOutputBucket
+          PIPELINE_EXECUTIONS_TABLE: !Ref PipelineExecutionsTable
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"error": "stub"}
+      LoggingConfig:
+        LogGroup: /aws/lambda/json-gen
+
+  # ─────────────────────────────────────────────
+  # WEB APP: S3 + CloudFront (OAC)
+  # ─────────────────────────────────────────────
+
+  # ── Bucket S3 para la Web_App estática ───────
+  WebAppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "fact-webapp-${Environment}-${AWS::AccountId}"
+      # Cifrado SSE-S3
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Acceso público bloqueado completamente; el acceso se gestiona vía CloudFront OAC
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # Sin website hosting: CloudFront sirve los archivos directamente desde S3
+
+  # ── Origin Access Control para CloudFront ────
+  # Permite que CloudFront acceda al bucket S3 sin exponer el bucket públicamente
+  WebAppOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "fact-webapp-oac-${Environment}"
+        Description: OAC para la Web_App del procesador de documentos fiscales
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ── Distribución CloudFront ───────────────────
+  WebAppDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Distribución CloudFront para la Web_App fiscal (${Environment})"
+        Enabled: true
+        HttpVersion: http2
+        # Solo US y Europa para reducir costos (PriceClass_100)
+        PriceClass: PriceClass_100
+        # Archivo raíz de la SPA
+        DefaultRootObject: index.html
+        Origins:
+          - Id: WebAppS3Origin
+            DomainName: !GetAtt WebAppBucket.RegionalDomainName
+            # Usar OAC en lugar del obsoleto OAI
+            OriginAccessControlId: !GetAtt WebAppOAC.Id
+            S3OriginConfig:
+              # Vacío porque el acceso se controla con OAC, no con OAI
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: WebAppS3Origin
+          # Redirigir HTTP a HTTPS
+          ViewerProtocolPolicy: redirect-to-https
+          # Política de caché optimizada para contenido estático (CachingOptimized)
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods: [GET, HEAD]
+          CachedMethods:  [GET, HEAD]
+          Compress: true
+        # Manejo de errores para SPA: redirigir 404 a index.html con código 200
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  # ── Bucket Policy: permitir acceso solo desde CloudFront OAC ──
+  WebAppBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebAppBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOACGetObject
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${WebAppBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                # Restringir al ARN exacto de esta distribución CloudFront
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebAppDistribution}"
+
+  # ─────────────────────────────────────────────
+  # STEP FUNCTIONS — Orquestador del pipeline
+  # ─────────────────────────────────────────────
+
+  # ── Rol IAM para Step Functions ──────────────
+  # Permite invocar las 4 Lambdas del pipeline y escribir logs en CloudWatch
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "fiscal-pipeline-sfn-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsPipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Invocar las 4 Lambdas del pipeline
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt DocClasifFunction.Arn
+                  - !GetAtt DocEvalFunction.Arn
+                  - !GetAtt DataExtractFunction.Arn
+                  - !GetAtt JsonGenFunction.Arn
+              # Escribir y actualizar ítems en DynamoDB pipeline-executions
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt PipelineExecutionsTable.Arn
+              # Escribir logs de ejecución en CloudWatch
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+
+  # ── Máquina de estados del pipeline fiscal ───
+  FiscalPipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "fiscal-pipeline-${Environment}"
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      # Logging de todas las ejecuciones en CloudWatch
+      LoggingConfiguration:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt LogGroupStepFunctions.Arn
+      # ── Definición ASL de la máquina de estados ──
+      Definition:
+        Comment: "Pipeline de procesamiento de documentos fiscales argentinos"
+        StartAt: RegistrarInicio
+
+        States:
+
+          # ── Paso 0: Registrar inicio en DynamoDB ──
+          RegistrarInicio:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref PipelineExecutionsTable
+              Item:
+                processing_id:
+                  S.$: "$.processing_id"
+                s3_key:
+                  S.$: "$.s3_key"
+                status:
+                  S: "RUNNING"
+                current_step:
+                  S: "DOC_CLASIF"
+                created_at:
+                  S.$: "$$.Execution.StartTime"
+                updated_at:
+                  S.$: "$$.Execution.StartTime"
+            ResultPath: "null"
+            Next: DocClasif
+
+          # ── Paso 1: Clasificación del documento ──
+          DocClasif:
+            Type: Task
+            Resource: !GetAtt DocClasifFunction.Arn
+            ResultPath: "$"
+            Next: VerificarErrorClasif
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: "$.lambda_error"
+                Next: RegistrarError
+
+          VerificarErrorClasif:
+            Type: Choice
+            Choices:
+              - Variable: "$.error"
+                IsNull: false
+                Next: RegistrarError
+            Default: ActualizarPasoDocEval_Pre
+
+          # Actualizar current_step antes de doc-eval
+          ActualizarPasoDocEval_Pre:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:updateItem
+            Parameters:
+              TableName: !Ref PipelineExecutionsTable
+              Key:
+                processing_id:
+                  S.$: "$.processing_id"
+              UpdateExpression: "SET current_step = :step, updated_at = :ts"
+              ExpressionAttributeValues:
+                ":step":
+                  S: "DOC_EVAL"
+                ":ts":
+                  S.$: "$$.State.EnteredTime"
+            ResultPath: "null"
+            Next: DocEval
+
+          # ── Paso 2: Evaluación de calidad ────────
+          DocEval:
+            Type: Task
+            Resource: !GetAtt DocEvalFunction.Arn
+            ResultPath: "$"
+            Next: VerificarErrorEval
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: "$.lambda_error"
+                Next: RegistrarError
+
+          VerificarErrorEval:
+            Type: Choice
+            Choices:
+              - Variable: "$.error"
+                IsNull: false
+                Next: RegistrarError
+            Default: ActualizarPasoDataExtract_Pre
+
+          # Actualizar current_step antes de data-extract
+          ActualizarPasoDataExtract_Pre:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:updateItem
+            Parameters:
+              TableName: !Ref PipelineExecutionsTable
+              Key:
+                processing_id:
+                  S.$: "$.processing_id"
+              UpdateExpression: "SET current_step = :step, updated_at = :ts"
+              ExpressionAttributeValues:
+                ":step":
+                  S: "DATA_EXTRACT"
+                ":ts":
+                  S.$: "$$.State.EnteredTime"
+            ResultPath: "null"
+            Next: DataExtract
+
+          # ── Paso 3: Extracción de datos ──────────
+          DataExtract:
+            Type: Task
+            Resource: !GetAtt DataExtractFunction.Arn
+            ResultPath: "$"
+            Next: VerificarErrorExtract
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: "$.lambda_error"
+                Next: RegistrarError
+
+          VerificarErrorExtract:
+            Type: Choice
+            Choices:
+              - Variable: "$.error"
+                IsNull: false
+                Next: RegistrarError
+            Default: ActualizarPasoJsonGen_Pre
+
+          # Actualizar current_step antes de json-gen
+          ActualizarPasoJsonGen_Pre:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:updateItem
+            Parameters:
+              TableName: !Ref PipelineExecutionsTable
+              Key:
+                processing_id:
+                  S.$: "$.processing_id"
+              UpdateExpression: "SET current_step = :step, updated_at = :ts"
+              ExpressionAttributeValues:
+                ":step":
+                  S: "JSON_GEN"
+                ":ts":
+                  S.$: "$$.State.EnteredTime"
+            ResultPath: "null"
+            Next: JsonGen
+
+          # ── Paso 4: Generación del JSON fiscal ───
+          JsonGen:
+            Type: Task
+            Resource: !GetAtt JsonGenFunction.Arn
+            ResultPath: "$"
+            Next: VerificarErrorJsonGen
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                ResultPath: "$.lambda_error"
+                Next: RegistrarError
+
+          VerificarErrorJsonGen:
+            Type: Choice
+            Choices:
+              - Variable: "$.error"
+                IsNull: false
+                Next: RegistrarError
+            Default: PipelineCompletado
+
+          # ── Estado final exitoso ─────────────────
+          PipelineCompletado:
+            Type: Succeed
+
+          # ── Estado de error: registrar en DynamoDB ──
+          # json-gen ya actualiza DynamoDB en caso de éxito;
+          # este estado cubre rechazos (doc-clasif, doc-eval) y errores técnicos.
+          # El error_code distingue el tipo: DOCUMENT_NOT_FISCAL / QUALITY_BELOW_THRESHOLD = rechazo,
+          # CLASSIFICATION_ERROR / EVALUATION_ERROR / EXTRACTION_ERROR / JSON_WRITE_ERROR = fallo técnico.
+          RegistrarError:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:updateItem
+            Parameters:
+              TableName: !Ref PipelineExecutionsTable
+              Key:
+                processing_id:
+                  S.$: "$.processing_id"
+              UpdateExpression: "SET #s = :status, error_code = :ec, updated_at = :ts"
+              ExpressionAttributeNames:
+                "#s": "status"
+              ExpressionAttributeValues:
+                ":status":
+                  S: "FAILED"
+                ":ec":
+                  S.$: "States.Format('{}', $.error)"
+                ":ts":
+                  S.$: "$$.State.EnteredTime"
+            ResultPath: "null"
+            Next: PipelineFallido
+
+          PipelineFallido:
+            Type: Fail
+            Error: "PipelineError"
+            Cause: "El pipeline se detuvo por un error o rechazo del documento"
+
+  # ─────────────────────────────────────────────
+  # OBSERVABILIDAD: CloudWatch Dashboard y Alarmas
+  # ─────────────────────────────────────────────
+
+  # ── Dashboard con métricas clave del pipeline ──
+  FiscalPipelineDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "fiscal-pipeline-${Environment}"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "# Pipeline Fiscal — Entorno: ${Environment}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 1, "width": 12, "height": 6,
+              "properties": {
+                "title": "Invocaciones Lambda (por función)",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "doc-clasif-${Environment}", {"label": "doc-clasif"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "doc-eval-${Environment}", {"label": "doc-eval"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "data-extract-${Environment}", {"label": "data-extract"}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "json-gen-${Environment}", {"label": "json-gen"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 1, "width": 12, "height": 6,
+              "properties": {
+                "title": "Errores Lambda (por función)",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["AWS/Lambda", "Errors", "FunctionName", "doc-clasif-${Environment}", {"label": "doc-clasif", "color": "#d62728"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "doc-eval-${Environment}", {"label": "doc-eval", "color": "#ff7f0e"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "data-extract-${Environment}", {"label": "data-extract", "color": "#9467bd"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "json-gen-${Environment}", {"label": "json-gen", "color": "#8c564b"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 7, "width": 12, "height": 6,
+              "properties": {
+                "title": "Duración Lambda P95 (ms)",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 300,
+                "stat": "p95",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "doc-clasif-${Environment}", {"label": "doc-clasif"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "doc-eval-${Environment}", {"label": "doc-eval"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "data-extract-${Environment}", {"label": "data-extract"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "json-gen-${Environment}", {"label": "json-gen"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 7, "width": 12, "height": 6,
+              "properties": {
+                "title": "Ejecuciones Step Functions",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["AWS/States", "ExecutionsStarted", "StateMachineArn", "${FiscalPipelineStateMachine}", {"label": "Iniciadas"}],
+                  ["AWS/States", "ExecutionsSucceeded", "StateMachineArn", "${FiscalPipelineStateMachine}", {"label": "Exitosas", "color": "#2ca02c"}],
+                  ["AWS/States", "ExecutionsFailed", "StateMachineArn", "${FiscalPipelineStateMachine}", {"label": "Fallidas", "color": "#d62728"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 13, "width": 12, "height": 6,
+              "properties": {
+                "title": "Duración Step Functions P95 (ms)",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 300,
+                "stat": "p95",
+                "metrics": [
+                  ["AWS/States", "ExecutionTime", "StateMachineArn", "${FiscalPipelineStateMachine}", {"label": "Duración pipeline"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 13, "width": 12, "height": 6,
+              "properties": {
+                "title": "Throttles Lambda",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["AWS/Lambda", "Throttles", "FunctionName", "doc-clasif-${Environment}", {"label": "doc-clasif"}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "doc-eval-${Environment}", {"label": "doc-eval"}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "data-extract-${Environment}", {"label": "data-extract"}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "json-gen-${Environment}", {"label": "json-gen"}]
+                ]
+              }
+            }
+          ]
+        }
+
+  # ── Alarma: tasa de error Lambda > 5% en 5 minutos ──
+  # Se crea una alarma por cada Lambda del pipeline.
+  # Usa métrica de expresión: Errors / Invocations > 0.05
+
+  AlarmDocClasifErrorRate:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "doc-clasif-error-rate-${Environment}"
+      AlarmDescription: "Tasa de error de doc-clasif supera el 5% en 5 minutos"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Threshold: 5
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: invocations
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Invocations
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "doc-clasif-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: errors
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "doc-clasif-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: error_rate
+          Expression: "(errors / invocations) * 100"
+          Label: "Tasa de error doc-clasif (%)"
+          ReturnData: true
+
+  AlarmDocEvalErrorRate:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "doc-eval-error-rate-${Environment}"
+      AlarmDescription: "Tasa de error de doc-eval supera el 5% en 5 minutos"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Threshold: 5
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: invocations
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Invocations
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "doc-eval-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: errors
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "doc-eval-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: error_rate
+          Expression: "(errors / invocations) * 100"
+          Label: "Tasa de error doc-eval (%)"
+          ReturnData: true
+
+  AlarmDataExtractErrorRate:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "data-extract-error-rate-${Environment}"
+      AlarmDescription: "Tasa de error de data-extract supera el 5% en 5 minutos"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Threshold: 5
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: invocations
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Invocations
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "data-extract-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: errors
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "data-extract-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: error_rate
+          Expression: "(errors / invocations) * 100"
+          Label: "Tasa de error data-extract (%)"
+          ReturnData: true
+
+  AlarmJsonGenErrorRate:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "json-gen-error-rate-${Environment}"
+      AlarmDescription: "Tasa de error de json-gen supera el 5% en 5 minutos"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Threshold: 5
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: invocations
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Invocations
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "json-gen-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: errors
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Sub "json-gen-${Environment}"
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: error_rate
+          Expression: "(errors / invocations) * 100"
+          Label: "Tasa de error json-gen (%)"
+          ReturnData: true
+
+  # ── Alarma: ejecuciones fallidas de Step Functions > 3 en 10 minutos ──
+  AlarmStepFunctionsFailed:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "fiscal-pipeline-executions-failed-${Environment}"
+      AlarmDescription: "Más de 3 ejecuciones del pipeline fallaron en los últimos 10 minutos"
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref FiscalPipelineStateMachine
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Period: 600
+      Statistic: Sum
+      Threshold: 3
+      TreatMissingData: notBreaching
+
+  # ─────────────────────────────────────────────
+  # TRIGGER: S3 Fact_input → EventBridge → Step Functions
+  # ─────────────────────────────────────────────
+
+  # ── Rol IAM para que EventBridge invoque Step Functions ──
+  EventBridgeToStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "fiscal-pipeline-eb-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeStartStepFunctions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref FiscalPipelineStateMachine
+
+  # ── Regla EventBridge: s3:ObjectCreated en Fact_input → Step Functions ──
+  # S3 ya tiene EventBridgeEnabled: true en su configuración (definido arriba).
+  # Esta regla filtra solo eventos de creación de objetos en el bucket Fact_input
+  # y construye el payload inicial del pipeline extrayendo processing_id y s3_key.
+  S3ToStepFunctionsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "fact-input-to-pipeline-${Environment}"
+      Description: Dispara el pipeline fiscal cuando se sube un archivo a Fact_input
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref FactInputBucket
+      Targets:
+        - Id: FiscalPipelineTarget
+          Arn: !Ref FiscalPipelineStateMachine
+          RoleArn: !GetAtt EventBridgeToStepFunctionsRole.Arn
+          # Transformar el evento S3 al payload inicial del pipeline:
+          # { "processing_id": "<prefijo de la clave>", "s3_key": "<clave completa>" }
+          # La clave S3 tiene formato: {processing_id}/{filename}
+          # Extraemos el processing_id tomando todo lo que está antes del primer "/"
+          InputTransformer:
+            InputPathsMap:
+              s3_key: "$.detail.object.key"
+            InputTemplate: |
+              {
+                "processing_id": "<s3_key>",
+                "s3_key": "<s3_key>",
+                "document_type": null,
+                "quality_score": null,
+                "extracted_data": null,
+                "error": null
+              }
+
+# ─────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────
+Outputs:
+  FactInputBucketName:
+    Description: Nombre del bucket S3 de entrada
+    Value: !Ref FactInputBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-FactInputBucket"
+
+  FactOutputBucketName:
+    Description: Nombre del bucket S3 de salida
+    Value: !Ref FactOutputBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-FactOutputBucket"
+
+  PipelineExecutionsTableName:
+    Description: Nombre de la tabla DynamoDB de ejecuciones
+    Value: !Ref PipelineExecutionsTable
+    Export:
+      Name: !Sub "${AWS::StackName}-PipelineExecutionsTable"
+
+  TxCounterTableName:
+    Description: Nombre de la tabla DynamoDB de contadores
+    Value: !Ref TxCounterTable
+    Export:
+      Name: !Sub "${AWS::StackName}-TxCounterTable"
+
+  PresignLambdaRoleArn:
+    Description: ARN del rol IAM para la Lambda presign
+    Value: !GetAtt PresignLambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-PresignLambdaRoleArn"
+
+  DocClasifLambdaRoleArn:
+    Description: ARN del rol IAM para la Lambda doc-clasif
+    Value: !GetAtt DocClasifLambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DocClasifLambdaRoleArn"
+
+  DocEvalLambdaRoleArn:
+    Description: ARN del rol IAM para la Lambda doc-eval
+    Value: !GetAtt DocEvalLambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DocEvalLambdaRoleArn"
+
+  DataExtractLambdaRoleArn:
+    Description: ARN del rol IAM para la Lambda data-extract
+    Value: !GetAtt DataExtractLambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DataExtractLambdaRoleArn"
+
+  JsonGenLambdaRoleArn:
+    Description: ARN del rol IAM para la Lambda json-gen
+    Value: !GetAtt JsonGenLambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-JsonGenLambdaRoleArn"
+
+  PresignApiUrl:
+    Description: URL del endpoint POST /presign en API Gateway
+    Value: !Sub "https://${PresignApi}.execute-api.${AWS::Region}.amazonaws.com/presign"
+    Export:
+      Name: !Sub "${AWS::StackName}-PresignApiUrl"
+
+  StatusApiUrl:
+    Description: URL base del endpoint GET /status/{processingId} en API Gateway
+    Value: !Sub "https://${PresignApi}.execute-api.${AWS::Region}.amazonaws.com/status"
+    Export:
+      Name: !Sub "${AWS::StackName}-StatusApiUrl"
+
+  WebAppUrl:
+    Description: URL pública de la Web_App servida por CloudFront
+    Value: !Sub "https://${WebAppDistribution.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-WebAppUrl"
+
+  DocClasifFunctionArn:
+    Description: ARN de la Lambda doc-clasif
+    Value: !GetAtt DocClasifFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DocClasifFunctionArn"
+
+  DocEvalFunctionArn:
+    Description: ARN de la Lambda doc-eval
+    Value: !GetAtt DocEvalFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DocEvalFunctionArn"
+
+  DataExtractFunctionArn:
+    Description: ARN de la Lambda data-extract
+    Value: !GetAtt DataExtractFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DataExtractFunctionArn"
+
+  JsonGenFunctionArn:
+    Description: ARN de la Lambda json-gen
+    Value: !GetAtt JsonGenFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-JsonGenFunctionArn"
+
+  FiscalPipelineStateMachineArn:
+    Description: ARN de la máquina de estados Step Functions del pipeline fiscal
+    Value: !Ref FiscalPipelineStateMachine
+    Export:
+      Name: !Sub "${AWS::StackName}-FiscalPipelineStateMachineArn"
+
+  EventBridgeRuleArn:
+    Description: ARN de la regla EventBridge que dispara el pipeline al subir un archivo
+    Value: !GetAtt S3ToStepFunctionsRule.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EventBridgeRuleArn"
+
+  DashboardUrl:
+    Description: URL del dashboard de CloudWatch del pipeline fiscal
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#dashboards:name=fiscal-pipeline-${Environment}"
+    Export:
+      Name: !Sub "${AWS::StackName}-DashboardUrl"
