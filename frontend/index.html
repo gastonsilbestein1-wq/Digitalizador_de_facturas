@@ -70,10 +70,10 @@
   <script src="config.js"></script>
   <div class="card">
     <h1>Documentos Fiscales</h1>
-    <p class="subtitle">Subí o fotografiá una factura o ticket fiscal argentino (JPG, PNG · máx. 10 MB)</p>
+    <p class="subtitle">Subí o fotografiá una factura o ticket fiscal argentino (JPG, PNG, PDF · máx. 10 MB)</p>
 
     <input type="file" id="inputCamera" accept="image/*" capture="environment" />
-    <input type="file" id="inputFile" accept=".jpg,.jpeg,.png" />
+    <input type="file" id="inputFile" accept=".jpg,.jpeg,.png,.pdf" />
 
     <div class="btn-group">
       <button class="btn btn-primary" id="btn-camera">📷 Sacar foto</button>
@@ -113,8 +113,8 @@
   <script>
     const MAX_SIZE_BYTES    = 10 * 1024 * 1024; // 10 MB límite de upload
     const TARGET_SIZE_BYTES = 3.5 * 1024 * 1024; // comprimir si supera 3.5 MB (límite Bedrock)
-    const VALID_EXTS     = ['.jpg', '.jpeg', '.png'];
-    const VALID_MIME     = ['image/jpeg', 'image/png'];
+    const VALID_EXTS     = ['.jpg', '.jpeg', '.png', '.pdf'];
+    const VALID_MIME     = ['image/jpeg', 'image/png', 'application/pdf'];
     const POLL_INTERVAL  = 3000;  // 3 segundos
     const POLL_MAX       = 40;    // máximo 2 minutos
 
@@ -174,13 +174,15 @@
     function validateFile(file) {
       if (!file) return null;
       const name = file.name.toLowerCase();
-      if (!VALID_EXTS.some(e => name.endsWith(e))) return 'Formato no válido. Usá JPG o PNG.';
+      if (!VALID_EXTS.some(e => name.endsWith(e))) return 'Formato no válido. Usá JPG, PNG o PDF.';
       return null;
     }
 
     // Comprime la imagen en canvas si supera TARGET_SIZE_BYTES.
+    // Los PDFs se pasan directamente sin comprimir.
     // Devuelve un Blob JPEG con tamaño <= MAX_SIZE_BYTES.
     async function compressIfNeeded(file) {
+      if (file.type === 'application/pdf') return file; // PDFs: sin compresión
       if (file.size <= TARGET_SIZE_BYTES) return file;
       return new Promise((resolve, reject) => {
         const img = new Image();
@@ -225,10 +227,14 @@
 
     function showPreview(file) {
       previewName.textContent = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
-      const reader = new FileReader();
-      reader.onload = e => { previewImg.src = e.target.result; };
-      reader.readAsDataURL(file);
-      previewImg.style.display = 'block';
+      if (file.type === 'application/pdf') {
+        previewImg.style.display = 'none';
+      } else {
+        const reader = new FileReader();
+        reader.onload = e => { previewImg.src = e.target.result; };
+        reader.readAsDataURL(file);
+        previewImg.style.display = 'block';
+      }
       previewWrap.style.display = 'block';
     }
 

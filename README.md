@@ -68,13 +68,13 @@ fiscal-document-processor/
 
 | Recurso | URL |
 |---|---|
-| Web App | `https://d19idv7wvt42ze.cloudfront.net` |
+| Web App | `https://d1zqr78cj4w3ku.cloudfront.net` |
 | API presign | `https://v19x1se7td.execute-api.us-east-1.amazonaws.com/presign` |
 | API status | `https://v19x1se7td.execute-api.us-east-1.amazonaws.com/status/{processingId}` |
 | Bucket entrada | `fact-input-dev-805472282641` |
 | Bucket salida | `fact-output-dev-805472282641` |
 | Step Function | `arn:aws:states:us-east-1:805472282641:stateMachine:fiscal-pipeline-dev` |
-| CloudFront ID | `E248ZOO2LTEOYL` |
+| CloudFront ID | `E7HVA8VATPFN6` |
 
 ## Requisitos previos
 
@@ -150,7 +150,7 @@ cdk destroy \
 
 ## Flujo del frontend
 
-1. El usuario selecciona o fotografía un documento (JPG/PNG, hasta 10 MB)
+1. El usuario selecciona o fotografía un documento (JPG, PNG o PDF, hasta 10 MB)
 2. Si la imagen supera 3.5 MB, el browser la comprime automáticamente antes de subir (siempre queda bajo el límite de 5 MB de Bedrock)
 3. Se llama a `POST /presign` para obtener una URL pre-firmada y un `processing_id`
 4. El archivo se sube directamente a S3 con `PUT`

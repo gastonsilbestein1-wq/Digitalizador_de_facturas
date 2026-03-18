@@ -210,10 +210,10 @@ class FiscalDocumentProcessorStack(Stack):
             auto_delete_objects=True,
         )
 
-        oac = cloudfront.S3OriginAccessControl(self, "WebAppOAC")
+        oac = cloudfront.S3OriginAccessControl(self, "WebAppOACV2")
 
         self.distribution = cloudfront.Distribution(
-            self, "WebAppDistribution",
+            self, "WebAppDistributionV2",
             comment=f"Web App fiscal ({self.env_name})",
             default_root_object="index.html",
             price_class=cloudfront.PriceClass.PRICE_CLASS_100,
@@ -235,9 +235,9 @@ class FiscalDocumentProcessorStack(Stack):
             ],
         )
 
-        # Subir frontend al bucket
+        # Subir frontend al bucket — sin invalidación automática
         s3deploy.BucketDeployment(
-            self, "WebAppDeploy",
+            self, "WebAppDeployV2",
             sources=[s3deploy.Source.asset(FRONTEND_DIR)],
             destination_bucket=self.webapp_bucket,
             distribution=self.distribution,
