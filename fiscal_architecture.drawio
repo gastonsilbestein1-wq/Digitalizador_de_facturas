@@ -1,0 +1,189 @@
+<mxfile host="app.diagrams.net" modified="2026-03-17" version="21.0.0">
+  <diagram name="Digitalizador de Facturas" id="fiscal-arch">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- USUARIO -->
+        <!-- ═══════════════════════════════════════ -->
+        <mxCell id="user" value="Usuario&#xa;(móvil/escritorio)" style="shape=mxgraph.aws4.user;fillColor=#232F3E;fontColor=#ffffff;strokeColor=none;fontSize=11;fontStyle=1;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="480" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- CLUSTER: FRONTEND -->
+        <!-- ═══════════════════════════════════════ -->
+        <mxCell id="cluster-frontend" value="Frontend" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#E8F4FD;strokeColor=#1a73e8;fontSize=12;fontColor=#1a73e8;" vertex="1" parent="1">
+          <mxGeometry x="160" y="390" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="cf" value="CloudFront" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=11;fillColor=#8C4FFF;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-frontend">
+          <mxGeometry x="20" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-webapp" value="S3 Web App&#xa;fact-webapp" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#3F8624;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-frontend">
+          <mxGeometry x="140" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- CLUSTER: API LAYER -->
+        <!-- ═══════════════════════════════════════ -->
+        <mxCell id="cluster-api" value="API Layer" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#FFF8E1;strokeColor=#F9A825;fontSize=12;fontColor=#F9A825;" vertex="1" parent="1">
+          <mxGeometry x="440" y="390" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="apigw" value="API Gateway&#xa;POST /presign&#xa;GET /status/{id}" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-api">
+          <mxGeometry x="20" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="presign" value="Lambda&#xa;presign" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-api">
+          <mxGeometry x="140" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- CLUSTER: STORAGE -->
+        <!-- ═══════════════════════════════════════ -->
+        <mxCell id="cluster-storage" value="Storage" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=12;fontColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="440" y="650" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-input" value="S3 Input&#xa;fact-input" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#3F8624;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-storage">
+          <mxGeometry x="20" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-output" value="S3 Output&#xa;fact-output" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#3F8624;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-storage">
+          <mxGeometry x="140" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- CLUSTER: PIPELINE -->
+        <!-- ═══════════════════════════════════════ -->
+        <mxCell id="cluster-pipeline" value="Pipeline" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#F3E5F5;strokeColor=#7B1FA2;fontSize=12;fontColor=#7B1FA2;" vertex="1" parent="1">
+          <mxGeometry x="730" y="300" width="620" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="eb" value="EventBridge" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="20" y="100" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="sfn" value="Step Functions&#xa;fiscal-pipeline" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.step_functions;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="120" y="100" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="clasif" value="doc-clasif" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="230" y="100" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="eval" value="doc-eval" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="330" y="100" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="extract" value="data-extract" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="430" y="100" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="jgen" value="json-gen" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#E7157B;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="530" y="100" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="bedrock" value="Amazon Bedrock&#xa;Claude Sonnet 4.5" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=11;fillColor=#01A88D;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-pipeline">
+          <mxGeometry x="330" y="200" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- CLUSTER: DYNAMODB -->
+        <!-- ═══════════════════════════════════════ -->
+        <mxCell id="cluster-ddb" value="DynamoDB" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=12;fontColor=#1565C0;" vertex="1" parent="1">
+          <mxGeometry x="730" y="650" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="ddb-exec" value="pipeline-executions" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#3F48CC;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-ddb">
+          <mxGeometry x="20" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ddb-counter" value="tx-counter" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=#ffffff;sketch=0;fontStyle=0;fontSize=11;fillColor=#3F48CC;strokeColor=none;fontColor=#232F3E;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="cluster-ddb">
+          <mxGeometry x="140" y="50" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════ -->
+        <!-- CONEXIONES -->
+        <!-- ═══════════════════════════════════════ -->
+
+        <!-- Usuario → CloudFront -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="user" target="cf" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- CloudFront → API Gateway -->
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="cf" target="apigw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- CloudFront ↔ S3 WebApp -->
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="cf" target="s3-webapp" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- API Gateway → presign -->
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="apigw" target="presign" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- presign → S3 Input (PUT pre-firmado) -->
+        <mxCell id="e5" value="PUT pre-firmado" style="edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=0;fontSize=10;" edge="1" source="presign" target="s3-input" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- presign → tx-counter -->
+        <mxCell id="e6" value="contador" style="edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" source="presign" target="ddb-counter" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S3 Input → EventBridge -->
+        <mxCell id="e7" value="ObjectCreated" style="edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" source="s3-input" target="eb" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- EventBridge → Step Functions -->
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="eb" target="sfn" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Step Functions → doc-clasif -->
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="sfn" target="clasif" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pipeline: clasif → eval → extract → jgen -->
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="clasif" target="eval" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="eval" target="extract" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;" edge="1" source="extract" target="jgen" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Lambdas → Bedrock -->
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;strokeColor=#01A88D;" edge="1" source="clasif" target="bedrock" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;strokeColor=#01A88D;" edge="1" source="eval" target="bedrock" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;strokeColor=#01A88D;" edge="1" source="extract" target="bedrock" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- json-gen → S3 Output -->
+        <mxCell id="e16" value="JSON fiscal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" source="jgen" target="s3-output" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- json-gen → DynamoDB executions -->
+        <mxCell id="e17" value="COMPLETED" style="edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" source="jgen" target="ddb-exec" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- presign → pipeline-executions (status polling) -->
+        <mxCell id="e18" value="GET status" style="edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;strokeColor=#1565C0;fontSize=10;" edge="1" source="presign" target="ddb-exec" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- presign → S3 Output (presigned URL) -->
+        <mxCell id="e19" value="presigned URL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;strokeColor=#2E7D32;fontSize=10;" edge="1" source="presign" target="s3-output" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
